@@ -1,0 +1,47 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY = "slizhcr.azurecr.io/spark-basics"
+        REGISTRY_NAME = "slizhcr"
+        STORAGE_ACCOUNT = "stslizhwesteurope"
+        MASTER = "k8s://https://bdccslizh-158be3e8.hcp.westeurope.azmk8s.io:443"
+        DEPLOY_MODE = "cluster"
+        APP_NAME = "spark-pi"
+        EXECUTOR_INSTANCES = "5"
+        MAIN_CLASS = "by.slizh.sparkbasics.Main"
+        PATH_TO_JAR = "local://opt/sparkbasics-1.0.0-jar-with-dependencies.jar"
+        AZURE_SERVICE_PRINCIPAL_CRED_ID = "azure-service-principal"
+    }
+
+    stages {
+        stage("Build with Maven") {
+            steps {
+                withMaven(maven: 'LOCAL_MAVEN') {
+                    bat 'mvn clean package'
+                }
+            }
+        }
+
+        stage ("Build Docker Image") {
+            steps {
+                bat "docker build -f docker/Dockerfile -t spark-image ."
+                bat "docker tag spark-image $REGISTRY"
+            }
+        }
+        stage ("Push to ACR") {
+            steps {
+                withCredentials([azureServicePrincipal(AZURE_SERVICE_PRINCIPAL_CRED_ID)]) {
+                   bat "az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID"
+                   bat "az acr login -n $REGISTRY_NAME"
+                   bat "docker push $REGISTRY"
+                }
+            }
+        }
+        stage ("Run spark job on Kubernetes") {
+            steps {
+                bat "%SPARK_HOME%/bin/spark-submit --master $MASTER --deploy-mode $DEPLOY_MODE --name $APP_NAME --class $MAIN_CLASS --conf spark.executor.instances=$EXECUTOR_INSTANCES --conf spark.kubernetes.container.image=$REGISTRY --conf spark.kubernetes.container.image.pullPolicy=Always $PATH_TO_JAR"
+            }
+        }
+    }
+  }
